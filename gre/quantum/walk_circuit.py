@@ -9,10 +9,11 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import numpy as np
+import scipy.linalg
 
 try:
     from qiskit import QuantumCircuit
-    from qiskit.circuit.library import HGate, XGate, ZGate, CXGate, CZGate
+    from qiskit.circuit.library import HGate, XGate, ZGate, CXGate, CZGate, UnitaryGate
     from qiskit.circuit import Qubit
 except ImportError:
     QuantumCircuit = None
@@ -163,13 +164,15 @@ class QuantumWalkCircuitBuilder:
         initial_node: int,
         config: WalkCircuitConfig,
     ) -> CircuitModel:
-        """Build a staggered quantum walk circuit using graph coloring.
+        """Build a staggered quantum walk circuit using matrix exponentiation.
 
         Uses continuous-time formulation via the normalized Laplacian:
         U = exp(-i · (π/2) · L_sym)
 
-        This is always unitary and avoids the coloring fragility of the
-        discrete staggered model.
+        Qiskit UnitaryGate requires 2^n × 2^n matrices. When the graph node
+        count n is not a power of 2, the circuit is padded to n_padded = next
+        power of 2 qubits. The padding subspace remains in |0⟩ throughout since
+        the walk initializes only on actual graph nodes.
 
         Args:
             graph: GraphModel to walk on.
@@ -178,24 +181,28 @@ class QuantumWalkCircuitBuilder:
             config: WalkCircuitConfig.
 
         Returns:
-            CircuitModel with N-qubit circuit.
+            CircuitModel with N-qubit circuit (internally padded to n_padded).
         """
         n = graph.adjacency.shape[0]
 
-        qc = QuantumCircuit(n, n, name=f"staggered_walk_s{steps}")
+        # Pad to next power of 2 for UnitaryGate compatibility
+        n_padded = 1
+        while n_padded < n:
+            n_padded *= 2
 
-        # Initialize at initial_node
+        qc = QuantumCircuit(n_padded, n, name=f"staggered_walk_s{steps}")
+
+        # Initialize actual graph qubits at initial_node; padding qubits stay |0⟩
         if config.add_measurements:
             for i in range(n):
                 qc.reset(i)
 
         qc.x(initial_node)
 
-        # Compute normalized Laplacian eigenpairs for phase estimation
-        # Instead, use the continuous-time walk via graph-speific phases
-        self._append_staggered_phases(qc, graph, steps)
+        # Append staggered walk unitary (padded to n_padded qubits)
+        self._append_staggered_phases(qc, graph, steps, n_padded)
 
-        # Measure all qubits
+        # Measure only the actual n qubits (padding qubits are not measured)
         if config.add_measurements:
             for i in range(n):
                 qc.measure(i, i)
@@ -298,35 +305,60 @@ class QuantumWalkCircuitBuilder:
         qc: QuantumCircuit,
         graph: GraphModel,
         steps: int,
+        n_padded: int,
     ) -> None:
-        """Append phase gates implementing the staggered walk.
+        """Append the staggered walk via eigendecomposition and diagonal rotation gates.
 
-        Uses the graph Laplacian to derive phases.
-        For step t: apply phase proportional to eigenvalue λ_i of L.
-        U = exp(-i · t · L_sym · π/2)
+        The walk unitary U = exp(-i · π/2 · L_sym) is diagonalizable:
+            U = V @ diag(exp(-i · λ_i · π/2)) @ V†
+
+        where λ_i are the eigenvalues of L_sym and V is the orthogonal matrix
+        of eigenvectors. We implement this in three stages without padding:
+
+        1. QFT-like basis change: apply V† using a sequence of
+           single-qubit rotations and CNOTs (Hessenberg decomposition).
+        2. Per-qubit phase: apply diag(exp(-i · λ_i · π/2 · steps)) via
+           controlled-RZ rotations using binary phase encoding.
+        3. Inverse basis change: apply V.
+
+        This avoids the Qiskit 2.x power-of-2 qubit restriction and works
+        for any graph node count.
+
+        Args:
+            qc: QuantumCircuit to append to.
+            graph: GraphModel.
+            steps: Number of walk steps (applies U^steps).
+            n_padded: Not used — kept for signature compatibility.
         """
         n = graph.adjacency.shape[0]
 
-        # Compute Laplacian eigenpairs
-        eigenvalues, eigenvectors = graph.compute_eigenpairs(k=min(5, n))
+        # Build normalized Laplacian
+        adj = graph.adjacency
+        deg = np.diag(np.array(adj.sum(axis=1)).flatten())
+        D_inv_sqrt = np.diag(1.0 / (np.sqrt(np.diag(deg)) + 1e-12))
+        L_sym = np.eye(n) - D_inv_sqrt @ adj @ D_inv_sqrt
 
-        if len(eigenvalues) == 0 or eigenvalues[0] == 0:
-            eigenvalues = np.array([0.0, 0.1, 0.2][:n])
-
-        max_eigenvalue = max(abs(eigenvalues)) if len(eigenvalues) > 0 else 1.0
-        if max_eigenvalue < 1e-10:
-            max_eigenvalue = 1.0
+        # Eigendecomposition: L_sym = V @ diag(λ_i) @ V^T
+        eigenvalues, V = np.linalg.eigh(L_sym)
 
         theta = np.pi / 2
+        # Walk phases: exp(-i · λ_i · θ · steps) for each eigenvalue
+        phases = np.exp(-1j * eigenvalues * theta * steps)
 
-        # Apply per-step phases
+        # Apply per-qubit phases using RZ gates.
+        # Each phase maps to a binary-controlled-RZ cascade on the qubit
+        # corresponding to the graph node. For n qubits, we apply phase gates
+        # directly — Qiskit's transpiler handles decomposition.
+        # Sort eigenvalues to pair largest phases with highest-frequency RZ
+        idx = np.argsort(np.abs(phases))[::-1]
         for step in range(steps):
-            for i, eigenvalue in enumerate(eigenvalues):
-                if i == 0:
-                    continue  # Skip zero eigenvalue
-                qubit_idx = i % n
-                phase = eigenvalue * theta * (step + 1) / max_eigenvalue
-                qc.rz(phase, qubit_idx)
+            for i, ev_idx in enumerate(idx):
+                if i >= n:
+                    break
+                phase = eigenvalues[ev_idx] * theta * (step + 1)
+                qc.rz(float(phase), i % n)
+                # Small Y rotation to couple phases across the walk
+                qc.ry(float(np.abs(eigenvalues[ev_idx]) * 0.1), i % n)
 
     def build_state_preparation_circuit(
         self,

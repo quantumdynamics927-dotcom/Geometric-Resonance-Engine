@@ -1,0 +1,38 @@
+{
+  "submission_stub": true,
+  "route": "pascal_mod2",
+  "level": 5,
+  "target_backend": "ibm_kingston",
+  "planned_shots": 8192,
+  "hypothesis_tag": "sierpinski_depth_invariant",
+  "circuit_family": "fractal_walk",
+  "calibration_snapshot_id": "cal-ibm-kingston-20260423",
+  "compiler_metadata": {
+    "route": "pascal_mod2",
+    "level": 5,
+    "graph_nodes": 245,
+    "graph_edges": 365,
+    "circuit_qubits": 256,
+    "circuit_depth": 11,
+    "spectral_gap": 0.0056605133042317325,
+    "eigenvalue_spacing_ratio": 0.9858686615256831,
+    "average_degree": 2.979591836734694,
+    "attractor_label": "oscillating_oscillating_none",
+    "walk_steps": 20,
+    "strategy": "staggered",
+    "emit_timestamp": "2026-07-16T21:01:03.598861Z"
+  },
+  "manual_submission_fields": {
+    "backend": "ibm_kingston",
+    "shots": 8192,
+    "job_tags": [
+      "route:pascal_mod2",
+      "level:5",
+      "hypothesis:sierpinski_depth_invariant",
+      "circuit_family:fractal_walk"
+    ]
+  },
+  "expected_lambda2": 0.0056605133042317325,
+  "expected_attractor": "oscillating_oscillating_none",
+  "notes": "Submit via: ibm quantum job submit pascal_mod2-L5-ibm_kingston.qasm --backend ibm_kingston --shots 8192\nAfter execution, import via: python scripts/import_new_ibm_jobs.py --source staged_hardware"
+}

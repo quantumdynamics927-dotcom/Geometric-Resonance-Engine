@@ -60,11 +60,12 @@ class GraphModel:
 
         return cls(adjacency=adj, laplacian=None, eigenpairs={})
 
-    def compute_eigenpairs(self, k: int = 10) -> Tuple[np.ndarray, np.ndarray]:
+    def compute_eigenpairs(self, k: int = 10, v0: Optional[np.ndarray] = None) -> Tuple[np.ndarray, np.ndarray]:
         """Compute k smallest eigenvalues and eigenvectors of the Laplacian.
 
         Args:
             k: Number of eigenpairs to compute (default 10).
+            v0: Optional starting vector (shape (n,)) to avoid ARPACK zero-vector issues.
 
         Returns:
             Tuple of (eigenvalues, eigenvectors) where:
@@ -74,9 +75,16 @@ class GraphModel:
         n = self.adjacency.shape[0]
         k = min(k, n - 1)
 
-        # Use sparse eigsh for efficiency
-        L_sparse = sparse.csr_matrix(self.laplacian)
-        eigenvalues, eigenvectors = eigsh(L_sparse, k=k, which="SM")
+        try:
+            # Use sparse eigsh for efficiency
+            L_sparse = sparse.csr_matrix(self.laplacian)
+            eigenvalues, eigenvectors = eigsh(L_sparse, k=k, which="SM", v0=v0)
+        except Exception:
+            # Fall back to dense eigenvalue computation
+            evals, evecs = np.linalg.eigh(self.laplacian)
+            idx = np.argsort(evals)
+            eigenvalues = evals[idx[:k]]
+            eigenvectors = evecs[:, idx[:k]]
 
         # Store in eigenpairs dict
         for i, ev in enumerate(eigenvalues):
@@ -119,7 +127,15 @@ class GraphModel:
         Returns:
             Second-smallest eigenvalue of Laplacian (λ₂).
         """
-        eigenvalues, _ = self.compute_eigenpairs(k=2)
+        n = self.adjacency.shape[0]
+        try:
+            v0 = np.random.default_rng(43).standard_normal(n)
+            v0 = v0 / (np.linalg.norm(v0) + 1e-12)
+            eigenvalues, _ = self.compute_eigenpairs(k=2, v0=v0)
+        except Exception:
+            # Fall back to dense eigenvalue computation (safe for small n)
+            eigenvalues = np.linalg.eigvalsh(self.laplacian)
+            eigenvalues = np.sort(eigenvalues)
         if len(eigenvalues) > 1:
             return float(eigenvalues[1])
         return 0.0

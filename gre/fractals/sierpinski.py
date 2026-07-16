@@ -367,15 +367,27 @@ class SierpinskiGenerator(FractalGenerator):
                 ))
                 node_counter += 1
 
-                # Edges to children in next row
+                # Edges to children in next row — add child to node_id_map immediately
+                # so the edge can be created in the same iteration
                 if r < level:
                     for child_pos in (pos * 2, pos * 2 + 1):
-                        if child_pos in [p for p in rows_states[r + 1].keys()]:
-                            if (r + 1, child_pos) in node_id_map:
-                                edges.append(Edge(
-                                    node_id, node_id_map[(r + 1, child_pos)],
-                                    edge_type="contraction"
-                                ))
+                        if child_pos in rows_states[r + 1]:
+                            child_id = node_counter
+                            node_id_map[(r + 1, child_pos)] = child_id
+                            child_y = -(r + 1) * row_height
+                            child_x = (child_pos - leftmost) * row_height
+                            nodes.append(Node(
+                                id=child_id,
+                                position=(float(child_x), float(child_y)),
+                                level=level,
+                                contraction_index=child_pos % 3,
+                                metadata={"rule90_pos": child_pos}
+                            ))
+                            node_counter += 1
+                            edges.append(Edge(
+                                node_id, child_id,
+                                edge_type="contraction"
+                            ))
 
         triangle_count = sum(len(s) for s in rows_states) // 3
         boundary_length = 3 * (3 / 2) ** level

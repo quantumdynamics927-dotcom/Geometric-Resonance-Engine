@@ -10,6 +10,7 @@ from .core.circuit import CircuitModel
 from .fractals.registry import FractalRegistry
 from .simulation.quantum_walk import QuantumWalkSimulator, WalkResult
 from .simulation.entropy import shannon_entropy, von_neumann_entropy, topological_entropy
+from .compiler import GeometryCompiler, GeometryCompilerConfig
 
 
 class GeometricResonanceEngine:
@@ -129,8 +130,12 @@ class GeometricResonanceEngine:
         """Facade for scoring metrics."""
         return MetricsFacade(self)
 
+    @property
+    def compile(self) -> "CompilerFacade":
+        return CompilerFacade(self)
 
-class SimulationFacade:
+
+class CompilerFacade:
     """Facade for simulation operations."""
 
     def __init__(self, engine: GeometricResonanceEngine):
@@ -282,6 +287,33 @@ class MetricsFacade:
         n = len(probs)
         pr = float(np.sum(probs) ** 2 / np.sum(probs ** 2))
         return pr / n if n > 0 else 0.0
+
+
+class CompilerFacade:
+    """Facade for the GRC compiler layer.
+
+    Usage:
+        gre = GeometricResonanceEngine(level=5)
+        result = gre.compile("sierpinski", route="ifs")
+    """
+    def __init__(self, engine: "GeometricResonanceEngine"):
+        self._engine = engine
+
+    def compile(
+        self,
+        geometry=None,
+        *,
+        level=None,
+        route="ifs",
+        strategies=None,
+    ):
+        """Compile a geometry using the Geometric Resonance Compiler."""
+        compiler = GeometryCompiler()
+        if geometry is None:
+            geometry = self._engine.generate(level=level or self._engine.default_level)
+        return compiler.compile(geometry, level=level, route=route, strategies=strategies)
+
+    __call__ = compile
 
 
 # Module-level convenience
